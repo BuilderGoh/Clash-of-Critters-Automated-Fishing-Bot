@@ -2,7 +2,17 @@
 
 An automatic fishing bot for Clash of Critters on BlueStacks 5. Fish in the background while using your computer normally. No AI subscription or API key required.
 
-**Version: v0.4.1 | Windows 10/11**
+**Version: v0.5.1 | Windows 10/11 | BlueStacks 5**
+
+## What it does
+
+- Automatically casts, reels and dismisses reward screens, including personal and team records.
+- Runs behind other Windows applications using persistent Scrcpy video and touch sockets.
+- Predicts marker movement and handles narrow or briefly obscured yellow targets.
+- Retries casting and reward dismissal every 0.5 seconds.
+- Includes F8 emergency stop and alternative ADB input.
+
+> Use the complete v0.5.1 source tree, not the v0.5.1 patch ZIP alone. If updating an older installation, apply the intervening patches in order before v0.5.1.
 
 ## First-time setup (only do this once)
 
@@ -55,7 +65,7 @@ The first installs Python dependencies; the second downloads and verifies the of
 
 Open BlueStacks 5 → **Settings → Advanced → Android Debug Bridge (ADB)**. Enable ADB and save changes. The default address is `127.0.0.1:5555`. Keep ADB local to your computer.
 
-Open Clash of Critters, navigate to Fishing Contest and use portrait orientation. Leave BlueStacks running.
+Open Clash of Critters, navigate to Fishing Contest and use portrait orientation. Leave BlueStacks running. The persistent control backend expects a 720 × 1280 encoded stream; the default streaming configuration requests this size.
 
 ### Step 6 — Test the bot
 
@@ -71,7 +81,7 @@ Open the generated `stream-snapshot.png` and confirm it shows your game. Then ru
 stream-live.bat --unknown-probe
 ```
 
-This test stops after one catch or 60 seconds. Watch it complete a fishing cycle before proceeding.
+Look for `Persistent scrcpy control connected` and `Touch backend: persistent scrcpy control` in the console. This test stops after one catch or 60 seconds. Watch it complete a fishing cycle before proceeding.
 
 ## Start fishing (every time)
 
@@ -94,10 +104,38 @@ That's it! The bot can fish while you use other windows. Leave BlueStacks runnin
 Start with automatic timing compensation (the default). If clicks are consistently late, try:
 
 ```cmd
-stream-continuous.bat --timing-lead-ms 100 --unknown-probe
+stream-continuous.bat --timing-lead-ms 50 --unknown-probe
 ```
 
 Adjust the number based on results. A larger number clicks earlier; zero disables prediction. A high lead is not necessarily better.
+
+### Bot misses small yellow targets
+
+Use the latest v0.5.1 files and start with automatic timing compensation. To collect detailed diagnostics, run:
+
+```cmd
+stream-live.bat --unknown-probe --timing-debug
+```
+
+The logs show raw marker and target detection, reconstructed target, predicted position, hit decision and click latch. A raw tuple with missing target bounds means the marker was found but the yellow strip was not; `raw=None` means marker detection failed. Remove `--timing-debug` for normal operation.
+
+### Video works but the bot does not tap
+
+Keep the fast video stream but switch to the previous ADB touch backend:
+
+```cmd
+stream-live.bat --unknown-probe --stream-input adb
+```
+
+If the test succeeds:
+
+```cmd
+stream-continuous.bat --unknown-probe --stream-input adb
+```
+
+### Bot gets stuck on a reward screen
+
+Ensure you have the latest vision files. Recognised reward screens are retried every 0.5 seconds. The optional unknown probe is limited to a single recovery tap; it is not unrestricted clicking. If the screen remains stuck, stop the bot and capture a screenshot for troubleshooting.
 
 ### Bot cannot connect to BlueStacks
 
@@ -150,8 +188,27 @@ Raw ADB capture may have higher latency during timed reeling. For foreground mod
 - Fishing rod depletion detection is not implemented. Supervise initial sessions.
 - Do not change Android resolution or orientation during a session.
 - If the game stops rendering when minimised, restore BlueStacks and leave it behind other windows.
-- Benchmark FPS is not end-to-end touch latency; ADB touch commands still have overhead.
+- Benchmark FPS and logged socket-write durations are not end-to-end touch latency. ADB fallback has additional subprocess overhead. Start with automatic timing compensation; do not assume a 0 ms socket write means instant in-game input.
 - This unofficial project is not affiliated with Clash of Critters or BlueStacks. Automation may violate game rules and lead to account penalties. Check the rules before using it.
+
+## Updating an existing installation
+
+Stop the bot with F8 or Ctrl+C. Back up your current folder. If you already have v0.5 with all previous patches, extract the v0.5.1 patch into the folder containing `bot.py`, replacing matching files. No additional dependencies are needed. Keep your existing launchers, templates and pinned Scrcpy server. Run the one-catch test again before continuous operation.
+
+## Changelog
+
+| Version | Changes |
+| --- | --- |
+| v0.5.1 | Narrow target detection, short-term occlusion recovery, duplicate-frame handling and timing diagnostics. |
+| v0.5 | Persistent Scrcpy touch socket and ADB input fallback. |
+| v0.4.3 | Generalised reward screen recognition, including team records. |
+| v0.4.2 | Improved narrow target handling and reward detection. |
+| v0.4.1 | Compatibility fix for ADB port forwarding. |
+| v0.4 | Persistent Scrcpy video streaming. |
+
+## Testing
+
+The v0.5.1 development build was reported to pass 64 unit tests and replay the original 530-frame gameplay recording. Synthetic narrow-target and occlusion tests do not guarantee live catch accuracy across machines or game versions.
 
 ## Credits
 
