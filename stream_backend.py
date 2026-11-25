@@ -1,5 +1,5 @@
-"""Pinned scrcpy 3.3.4 video-only transport with a latest-frame FFmpeg decoder."""
-import logging, os, secrets, shutil, socket, subprocess, threading, time
+"""Pinned scrcpy 3.3.4 video and optional control transport with a latest-frame FFmpeg decoder."""
+import logging, os, secrets, shutil, socket, struct, subprocess, threading, time
 from pathlib import Path
 import numpy as np
 
@@ -94,6 +94,42 @@ def allocate_forward(adb, remote):
                        'Check HD-Adb.exe forward --list and adb version.')
 
 
+# scrcpy v3.3.4: INJECT_TOUCH_EVENT = 2, generic finger = -2.
+# Position is expressed in the *encoded video* coordinate system.
+TOUCH = struct.Struct('>BBQiiHHHII')
+
+
+def touch_packet(action, x, y, width, height):
+    if action not in (0, 1):
+        raise ValueError('Expected touch down or up')
+    if not (0 < width <= 65535 and 0 < height <= 65535 and 0 <= x < width and 0 <= y < height):
+        raise ValueError('Touch outside video bounds')
+    return TOUCH.pack(2, action, (1 << 64)-2, x, y, width, height,
+                      65535 if action == 0 else 0, 0, 0)
+
+
+def recv_exact(sock, n):
+    result = bytearray()
+    while len(result) < n:
+        part = sock.recv(n-len(result))
+        if not part:
+            raise EOFError('scrcpy socket closed during handshake')
+        result.extend(part)
+    return bytes(result)
+
+
+def read_video_header(sock):
+    codec, width, height = struct.unpack('>III', recv_exact(sock, 12))
+    if codec != 0x68323634 or (width, height) != (WIDTH, HEIGHT):
+        raise RuntimeError(f'Expected H264 {WIDTH}x{HEIGHT}, received codec {codec:#x} {width}x{height}; use --stream-input adb')
+    return width, height
+
+
+def send_tap(sock, x, y, width=WIDTH, height=HEIGHT):
+    # One write, no subprocess. Never retry an ambiguous partial write.
+    sock.sendall(touch_packet(0, x, y, width, height) + touch_packet(1, x, y, width, height))
+
+
 class LatestFrames:
     def __init__(self):
         self.condition = threading.Condition()
@@ -127,13 +163,16 @@ class LatestFrames:
 
 
 class StreamCapture:
-    def __init__(self, adb, server=None, ffmpeg=None, max_fps=60, bitrate=8_000_000):
+    def __init__(self, adb, server=None, ffmpeg=None, max_fps=60, bitrate=8_000_000, control=False):
         self.adb = adb
         self.server = find_server(server)
         self.ffmpeg = find_ffmpeg(ffmpeg)
         self.max_fps = max_fps
         self.bitrate = bitrate
         self.mode = 'scrcpy'
+        self.control_enabled = control
+        self.control_sock = None
+        self.control_error = None
         self.port = None
         self.remote = None
         self.proc = self.decoder = self.sock = None
@@ -165,8 +204,12 @@ class StreamCapture:
         command = [self.adb.exe, '-s', self.adb.serial, 'shell', 'CLASSPATH=' + self.remote,
                    'app_process', '/', 'com.genymobile.scrcpy.Server', VERSION,
                    'scid=' + scid, 'log_level=info', 'tunnel_forward=true', 'audio=false',
-                   'control=false', 'cleanup=false', 'raw_stream=true', 'video_codec=h264',
+                   'control=' + str(self.control_enabled).lower(), 'cleanup=false', 'raw_stream=true', 'video_codec=h264',
                    'max_size=1280', 'max_fps=' + str(self.max_fps), 'video_bit_rate=' + str(self.bitrate)]
+        if self.control_enabled:
+            # raw_stream disables metadata; explicitly restore the dummy byte
+            # and codec header. The server waits for both sockets before video.
+            command += ['send_dummy_byte=true', 'send_codec_meta=true', 'clipboard_autosync=false']
         self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=server_log,
                                      stderr=subprocess.STDOUT, creationflags=FLAGS)
         # The ADB forward may exist before the Android server starts listening.
@@ -179,26 +222,70 @@ class StreamCapture:
             try:
                 s = socket.create_connection(('127.0.0.1', self.port), timeout=1)
                 s.settimeout(3)
-                first = s.recv(65536)
+                if self.control_enabled:
+                    first = recv_exact(s, 1)
+                    if first != b'\x00':
+                        s.close()
+                        raise RuntimeError('Invalid scrcpy handshake')
+                else:
+                    first = s.recv(65536)
                 if first:
                     self.sock = s
                     s.settimeout(5)
                     break
-            except (OSError, TimeoutError):
+            except (OSError, TimeoutError, EOFError):
                 pass
             if s is not None:
                 s.close()
             time.sleep(.15)
         if self.sock is None:
             raise RuntimeError('Cannot receive scrcpy video; inspect scrcpy-server.log')
+        if self.control_enabled:
+            # The video socket was accepted first; this is the second socket.
+            self.control_sock = socket.create_connection(('127.0.0.1', self.port), timeout=3)
+            self.control_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.control_sock.settimeout(1)
+            self.sock.settimeout(5)
+            read_video_header(self.sock)
+            first = self.sock.recv(65536)
+            if not first:
+                raise RuntimeError('No H264 data after control handshake')
+            LOG.info('Persistent scrcpy control connected (720x1280 video coordinates)')
         decoder_log = open(ROOT / 'scrcpy-decoder.log', 'wb')
         self.logfiles.append(decoder_log)
         self.decoder = subprocess.Popen(decoder_command(self.ffmpeg), stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=decoder_log, bufsize=0, creationflags=FLAGS)
         self.threads = [threading.Thread(target=self._feed, args=(first,), daemon=True),
                         threading.Thread(target=self._decode, daemon=True)]
+        if self.control_enabled:
+            self.threads.append(threading.Thread(target=self._drain_control, daemon=True))
         for thread in self.threads:
             thread.start()
+
+    def _drain_control(self):
+        # No clipboard synchronization or data logging. Drain unsolicited
+        # server messages so they cannot fill the device-side send buffer.
+        try:
+            while not self.closed.is_set():
+                try:
+                    data = self.control_sock.recv(4096)
+                except socket.timeout:
+                    continue
+                if not data:
+                    raise EOFError('scrcpy control connection closed')
+        except Exception as exc:
+            if not self.closed.is_set():
+                self.control_error = exc
+                self.latest.fail(exc)
+
+    def tap(self, x, y):
+        if self.control_sock is None or self.closed.is_set() or self.control_error is not None:
+            raise RuntimeError('scrcpy control unavailable; stop and restart with --stream-input adb')
+        try:
+            send_tap(self.control_sock, x, y)
+        except OSError as exc:
+            raise RuntimeError('scrcpy touch send failed; stopping (no automatic retry). Restart with --stream-input adb if needed.') from exc
+
 
     def _feed(self, first):
         try:
@@ -240,10 +327,11 @@ class StreamCapture:
             return
         self.closed.set()
         self.latest.fail('closed')
-        if self.sock is not None:
-            try: self.sock.shutdown(socket.SHUT_RDWR)
-            except OSError: pass
-            self.sock.close()
+        for sock in (self.control_sock, self.sock):
+            if sock is not None:
+                try: sock.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+                sock.close()
         for proc in (self.decoder, self.proc):
             if proc is not None:
                 try:

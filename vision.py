@@ -32,6 +32,34 @@ def norm(frame,rect):
 
 def fraction(a,lo,hi):return cv2.inRange(a,lo,hi).mean()/255
 
+def timing_observation(hsv):
+    # Column support, not total area: a one-pixel-wide full-height strip
+    # may be a real target. A softer mask handles H.264 chroma smearing.
+    strip=hsv[850:872,205:550]
+    strong=cv2.inRange(strip,(20,130,165),(40,255,255))
+    soft=cv2.inRange(strip,(16,80,145),(45,255,255))
+    sc=np.count_nonzero(strong,axis=0); wc=np.count_nonzero(soft,axis=0)
+    cols=np.flatnonzero((sc>=7)|((wc>=12)&(sc>=2)))+205
+    area=hsv[830:870,195:560]
+    red=cv2.inRange(area,(0,125,130),(12,255,255))|cv2.inRange(area,(170,125,130),(179,255,255))
+    _,_,stats,cent=cv2.connectedComponentsWithStats(red)
+    markers=[(int(s[4]),float(c[0]+195)) for s,c in zip(stats[1:],cent[1:]) if 10<=s[2]<=48 and 10<=s[3]<=40 and s[4]>100]
+    if not markers:return 'timing',False,None
+    mx=max(markers)[1]
+    if not len(cols):return 'timing',False,(round(mx,1),None,None,None)
+    runs=np.split(cols,np.flatnonzero(np.diff(cols)>2)+1)
+    # Only bridge a gap if the marker itself could hide that part of the zone.
+    merged=[]
+    for run in runs:
+        l,r=int(run[0]),int(run[-1])
+        if merged and l-merged[-1][1]<=34 and merged[-1][1]-3<=mx<=l+3 and max(abs(mx-l),abs(mx-merged[-1][1]))<=22:
+            merged[-1]=(merged[-1][0],r)
+        else:merged.append((l,r))
+    # Prefer the longest coherent strip; don't merge unrelated yellow objects.
+    l,r=max(merged,key=lambda z:(z[1]-z[0]+1,-abs((z[0]+z[1])/2-mx)))
+    gap=max(l-mx,mx-r,0)
+    return 'timing',gap<=.5,(round(mx,1),l,r,round(gap,1))
+
 def observe(frame):
     hsv=cv2.cvtColor(frame,cv2.COLOR_BGR2HSV)
     # Rewards overlay is dark, with distinct yellow heading and a green claim button.
@@ -57,15 +85,7 @@ def observe(frame):
     if purple>.23:
         prompt=fraction(hsv[765:825,180:540],(125,85,100),(169,255,255))
         if prompt>.28:return 'bite',False,None
-        yellow=cv2.inRange(hsv[850:872,205:550],(20,145,175),(38,255,255))
-        area=hsv[830:870,195:560]; red=cv2.inRange(area,(0,125,130),(12,255,255))|cv2.inRange(area,(170,125,130),(179,255,255))
-        n,_,stats,cent=cv2.connectedComponentsWithStats(red)
-        markers=[(int(s[4]),float(c[0]+195)) for s,c in zip(stats[1:],cent[1:]) if 10<=s[2]<=48 and 10<=s[3]<=40 and s[4]>100]
-        yy=np.flatnonzero((yellow>0).sum(axis=0)>=8)+205
-        if markers and len(yy)>=4:
-            mx=max(markers)[1]; gap=float(np.min(np.abs(yy-mx))); hit=gap<=2
-            return 'timing',hit,(round(mx,1),int(yy.min()),int(yy.max()),round(gap,1))
-        return 'timing',False,None
+        return timing_observation(hsv)
     gray=fraction(button,(0,0,55),(179,60,255))
     if gray>.27:return 'waiting',False,None
     return 'unknown',False,None
@@ -111,9 +131,9 @@ class Controller:
         elif not self.reward_pending:
             self.reward_since=-1.
         if state=='timing':
-            if details is not None:
+            if details is not None and details[1] is not None and details[2] is not None:
                 zone=tuple(details[1:3])
-                if self.target is not None and max(abs(zone[0]-self.target[0]),abs(zone[1]-self.target[1]))>12:
+                if self.target is not None and (max(abs(zone[0]-self.target[0]),abs(zone[1]-self.target[1]))>12 or (min(zone[1],self.target[1]) < max(zone[0],self.target[0])-2)):
                     self.latch=False;self.off=0
                 self.target=zone
             if not hit:

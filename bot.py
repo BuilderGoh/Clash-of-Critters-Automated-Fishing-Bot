@@ -111,7 +111,7 @@ def replay(path):
         if viewport is None:viewport=locate(frame); LOG.info('Viewport: %s',viewport)
         state,hit,details=analyze(frame,viewport); now=i/fps
         if state!=previous:LOG.info('%.2fs State: %s',now,state);previous=state
-        action=c.step(state,hit,now)
+        action=c.step(state,hit,now,details)
         if action:n+=1;LOG.info('%.2fs WOULD CLICK %s %s',now,action,details or '')
         i+=1
     cap.release(); LOG.info('Replay: %d frames, %d proposed clicks, %d claims',i,n,c.cycles)
@@ -126,7 +126,7 @@ def adb_main(args):
         # Query original Android dimensions once; stream frames use normalized size.
         physical=adb.capture(); ph,pw=physical.shape[:2]
         if abs(pw/ph-720/1280)>.025:raise RuntimeError('Expected portrait 9:16 Android screen')
-        with StreamCapture(adb,args.scrcpy_server,args.ffmpeg_path,args.stream_fps,args.stream_bitrate) as stream:
+        with StreamCapture(adb,args.scrcpy_server,args.ffmpeg_path,args.stream_fps,args.stream_bitrate,control=args.stream_input=='scrcpy') as stream:
             return adb_loop(args,adb,stream,(pw,ph))
     return adb_loop(args,adb,adb)
 
@@ -135,6 +135,8 @@ def adb_loop(args,adb,source,physical_size=None):
     from timing import TimingLead
     tracker=TimingLead()
     streaming=args.backend=='stream'
+    socket_input=streaming and args.stream_input=='scrcpy'
+    LOG.info('Touch backend: %s', 'persistent scrcpy control' if socket_input else 'ADB shell input')
     win=Windows() if sys.platform=='win32' else None
     stop=lambda: win is not None and win.stop()
     frame=source.capture(); h,w=frame.shape[:2]
@@ -155,8 +157,8 @@ def adb_loop(args,adb,source,physical_size=None):
     if args.live and initial=='timing':raise RuntimeError('Start live mode before casting or while waiting, not during timed reeling.')
     LOG.info('%s %s mode; F8 or Ctrl+C stops. Limits: %d catches / %ds', 'LIVE' if args.live else 'DRY RUN', 'SCRCPY' if streaming else 'ADB',args.max_catches,args.max_seconds)
     controller=Controller(unknown_probe=args.unknown_probe); start=time.monotonic();last_known=start;n=0;previous=None
-    tap_ms=None
-    LOG.info("ADB timing lead: %s", "auto" if args.timing_lead_ms is None else f"{args.timing_lead_ms:.0f} ms")
+    tap_ms=None; last_timing_debug=-99.0
+    LOG.info("Timing lead: %s", "auto" if args.timing_lead_ms is None else f"{args.timing_lead_ms:.0f} ms")
     while not stop() and controller.cycles<args.max_catches and time.monotonic()-start<args.max_seconds:
         t=time.monotonic();frame=source.capture();now=time.monotonic()
         if stop() or now-start>=args.max_seconds:break
@@ -170,15 +172,23 @@ def adb_loop(args,adb,source,physical_size=None):
         # duration is an upper bound on delivery delay, not a measurement of it.
         stamp=source.stamp if streaming else (t+now)/2
         estimated_age=args.stream_latency_ms if streaming else capture_ms*.5
-        lead=args.timing_lead_ms if args.timing_lead_ms is not None else max(0, estimated_age + (tap_ms*.5 if tap_ms is not None else 40) + (time.monotonic()-(stamp if streaming else now))*1000)
+        lead=args.timing_lead_ms if args.timing_lead_ms is not None else max(0, estimated_age + (args.control_latency_ms if socket_input else (tap_ms*.5 if tap_ms is not None else 40)) + (time.monotonic()-(stamp if streaming else now))*1000)
         hit,prediction=tracker.step(state,hit,details,stamp,lead)
-        action=controller.step(state,hit,time.monotonic(),details)
+        if args.timing_debug and state=='timing' and now-last_timing_debug>=.5:
+            LOG.info('TIMING raw=%s resolved=%s prediction=%s hit=%s latch=%s',details,tracker.resolved_details,prediction,hit,controller.latch)
+            last_timing_debug=now
+        action=controller.step(state,hit,time.monotonic(),tracker.resolved_details if state=='timing' else details)
         if controller.cycles>=args.max_catches:break
         if action:
+            if action=='timed_reel':tracker.note_click()
             px,py=(360,1125) if action=='claim' else (360,1040)
             if stop():break
             if args.live:
-                tap_start=time.monotonic();adb.tap(round(px/720*pw),round(py/1280*ph))
+                tap_start=time.monotonic()
+                if socket_input:
+                    source.tap(px,py)
+                else:
+                    adb.tap(round(px/720*pw),round(py/1280*ph))
                 elapsed=(time.monotonic()-tap_start)*1000
                 tap_ms=elapsed if tap_ms is None else .7*tap_ms+.3*elapsed
             n+=1;LOG.info('%s %s (#%d) %s [capture %.0fms, tap %s, lead %.0fms, prediction %s]', 'CLICK' if args.live else 'WOULD CLICK',action,n,details or '',capture_ms, f'{tap_ms:.0f}ms' if tap_ms is not None else 'n/a',lead,prediction or 'n/a')
@@ -187,7 +197,8 @@ def adb_loop(args,adb,source,physical_size=None):
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--live',action='store_true');p.add_argument('--snapshot',action='store_true');p.add_argument('--image',type=Path);p.add_argument('--replay',type=Path);p.add_argument('--max-catches',type=int,default=3);p.add_argument('--max-seconds',type=int,default=180);p.add_argument("--backend",choices=("window","adb","stream"),default="window");p.add_argument("--serial",default="127.0.0.1:5555");p.add_argument("--adb-path");p.add_argument("--capture-mode",choices=("raw","png"),default="raw");p.add_argument("--benchmark",action="store_true");p.add_argument("--timing-lead-ms",type=float,help="ADB timing lead in milliseconds (default: automatic; 0 disables prediction)");p.add_argument("--unknown-probe",action="store_true",help="One experimental recovery tap after a persistent unknown screen following reeling or rewards");p.add_argument('--scrcpy-server');p.add_argument('--ffmpeg-path');p.add_argument('--stream-fps',type=int,default=60);p.add_argument('--stream-bitrate',type=int,default=8000000);p.add_argument('--stream-latency-ms',type=float,default=35,help='Estimated video transport delay for automatic timing lead (not measured)');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--live',action='store_true');p.add_argument('--snapshot',action='store_true');p.add_argument('--image',type=Path);p.add_argument('--replay',type=Path);p.add_argument('--max-catches',type=int,default=3);p.add_argument('--max-seconds',type=int,default=180);p.add_argument("--backend",choices=("window","adb","stream"),default="window");p.add_argument("--serial",default="127.0.0.1:5555");p.add_argument("--adb-path");p.add_argument("--capture-mode",choices=("raw","png"),default="raw");p.add_argument("--benchmark",action="store_true");p.add_argument("--timing-lead-ms",type=float,help="ADB timing lead in milliseconds (default: automatic; 0 disables prediction)");p.add_argument("--unknown-probe",action="store_true",help="One experimental recovery tap after a persistent unknown screen following reeling or rewards");p.add_argument('--scrcpy-server');p.add_argument('--ffmpeg-path');p.add_argument('--stream-fps',type=int,default=60);p.add_argument('--stream-bitrate',type=int,default=8000000);p.add_argument('--stream-latency-ms',type=float,default=35,help='Estimated video transport delay for automatic timing lead (not measured)');p.add_argument('--stream-input',choices=('scrcpy','adb'),default='scrcpy',help='Persistent control socket (default) or ADB touch fallback');p.add_argument('--timing-debug',action='store_true',help='Log marker/target observations during timing');p.add_argument('--control-latency-ms',type=float,default=8,help='Estimated device input delay for scrcpy control, not measured');args=p.parse_args()
+    if not math.isfinite(args.control_latency_ms) or args.control_latency_ms<0:p.error('Control latency must be finite and nonnegative')
     if not 1<=args.stream_fps<=120 or args.stream_bitrate<100000 or not math.isfinite(args.stream_latency_ms) or args.stream_latency_ms<0:p.error('Invalid stream settings')
     if args.timing_lead_ms is not None and (not math.isfinite(args.timing_lead_ms) or args.timing_lead_ms<0):p.error("Timing lead must be a finite nonnegative number")
     if args.max_catches<1 or args.max_seconds<1:p.error('Limits must be positive')
