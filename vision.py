@@ -45,7 +45,11 @@ def observe(frame):
     # A bright saturated card between dimmed upper and lower game regions.
     panel=fraction(hsv[390:880],(0,80,120),(179,255,255))
     upper=np.median(hsv[20:145,:,2]); lower=np.median(hsv[1160:1220,:,2])
-    if max(score,record_score)>.68 and panel>.22 and upper<150 and lower<130:
+    # Alternate titles share the same bright card and dark leaderboard banner.
+    banner_text=fraction(hsv[890:940,20:700],(0,0,195),(179,80,255))
+    banner_dark=fraction(hsv[930:970],(0,0,0),(179,255,65))
+    structural=panel>.45 and upper<100 and lower<85 and banner_text>.08 and banner_dark>.85
+    if (max(score,record_score)>.68 and panel>.22 and upper<150 and lower<130) or structural:
         return 'dismiss',False,None
     button=hsv[960:1145,265:455]
     green=fraction(button,(35,110,120),(85,255,255)); purple=fraction(button,(125,90,130),(169,255,255))
