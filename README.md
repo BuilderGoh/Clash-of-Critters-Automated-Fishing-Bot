@@ -1,64 +1,158 @@
-# CrittersFishingBot
+# 🎣 CrittersFishingBot
 
-A local Python computer-vision fishing assistant for Clash of Critters on BlueStacks 5. Supports background operation using a persistent scrcpy video stream and ADB touch input, as well as raw ADB and foreground window modes. No AI API or subscription required.
+An automatic fishing bot for Clash of Critters on BlueStacks 5. Fish in the background while using your computer normally. No AI subscription or API key required.
 
-## Quick start (Windows 10/11)
+**Version: v0.4.1 | Windows 10/11**
 
-1. Install [Python](https://www.python.org/downloads/windows/) (3.12 recommended; 3.14 was used successfully by the original tester). Enable Python on PATH.
-2. Download this repository as a ZIP and extract it, or clone it. Open CMD in the folder containing `bot.py`.
-3. Run `setup.bat` to create the virtual environment and install dependencies.
-4. Install FFmpeg: `winget install --id Gyan.FFmpeg -e`. Reopen CMD and verify with `ffmpeg -version`.
-5. In BlueStacks 5, enable **Settings > Advanced > Android Debug Bridge (ADB)**. Keep it local to your computer. Default device is `127.0.0.1:5555`.
-6. Run `setup-stream.bat`. It downloads the official scrcpy v3.3.4 server and verifies its SHA-256 checksum.
-7. Open Clash of Critters and navigate to Fishing Contest. Use portrait orientation and keep the emulator rendering.
+## First-time setup (only do this once)
 
-```bat
+### Step 1 — Install Python
+
+Open Command Prompt (press `Windows + R`, type `cmd`, press Enter). Copy and paste:
+
+```cmd
+winget install --id Python.Python.3.12 -e
+```
+
+If prompted, accept the installation. Alternatively, download [Python](https://www.python.org/downloads/windows/) and select **Add Python to PATH** in the installer.
+
+### Step 2 — Install FFmpeg
+
+In Command Prompt, copy and paste:
+
+```cmd
+winget install --id Gyan.FFmpeg -e
+```
+
+Close Command Prompt and open a new one. Verify both installations:
+
+```cmd
+py --version
+ffmpeg -version
+```
+
+### Step 3 — Download the bot
+
+On this GitHub repository, click the green **Code** button, then **Download ZIP**. Right-click the downloaded ZIP and select **Extract All**.
+
+Open the extracted folder containing `bot.py` and `setup.bat`. Click the File Explorer address bar, type `cmd`, and press Enter. This opens Command Prompt in the correct folder, regardless of where you extracted the ZIP.
+
+### Step 4 — Install the bot
+
+Copy and paste the following commands one at a time. Wait for each to finish and press any key when prompted.
+
+```cmd
+setup.bat
+```
+
+```cmd
+setup-stream.bat
+```
+
+The first installs Python dependencies; the second downloads and verifies the official scrcpy v3.3.4 server. You do not need to install scrcpy separately.
+
+### Step 5 — Configure BlueStacks
+
+Open BlueStacks 5 → **Settings → Advanced → Android Debug Bridge (ADB)**. Enable ADB and save changes. The default address is `127.0.0.1:5555`. Keep ADB local to your computer.
+
+Open Clash of Critters, navigate to Fishing Contest and use portrait orientation. Leave BlueStacks running.
+
+### Step 6 — Test the bot
+
+In the bot folder's Command Prompt, run:
+
+```cmd
 stream-snapshot.bat
-stream-benchmark.bat
-stream-dry-run.bat --unknown-probe
+```
+
+Open the generated `stream-snapshot.png` and confirm it shows your game. Then run:
+
+```cmd
 stream-live.bat --unknown-probe
 ```
 
-Inspect the snapshot, then benchmark on an animated screen. Dry run makes no clicks; manually fish to verify detection. Live test stops after one catch or 60 seconds. Once verified, use:
+This test stops after one catch or 60 seconds. Watch it complete a fishing cycle before proceeding.
 
-```bat
+## Start fishing (every time)
+
+Open BlueStacks and navigate to Fishing Contest. Open Command Prompt in the bot folder (type `cmd` in the File Explorer address bar), then copy and paste:
+
+```cmd
 stream-continuous.bat --unknown-probe
 ```
 
-Continuous mode runs for up to 2,000 catches or 24 hours. Press **F8** or **Ctrl+C** to stop. Leave BlueStacks running behind other windows; minimised rendering is not guaranteed. Do not change Android resolution or orientation during a session.
+That's it! The bot can fish while you use other windows. Leave BlueStacks running behind them; minimised operation is not guaranteed. The session stops after 2,000 catches or 24 hours, whichever comes first.
 
-## Launchers
+**To stop:** press **F8** or focus the Command Prompt and press **Ctrl+C**.
 
-| Launcher | Purpose |
-| --- | --- |
-| `setup.bat` | Install Python dependencies |
-| `setup-stream.bat` | Download and verify scrcpy server |
-| `stream-snapshot.bat` | Verify video capture |
-| `stream-benchmark.bat` | Measure fresh frame delivery |
-| `stream-dry-run.bat` | Observe without clicking |
-| `stream-live.bat` | One-catch streaming test |
-| `stream-continuous.bat` | Continuous streaming mode |
-| `adb-*.bat` | Raw ADB screenshot alternatives |
-| `dry-run.bat`, `live.bat` | Foreground window mode |
+> The optional `--unknown-probe` enables a single experimental recovery tap after an unrecognised post-fishing screen. Remove it if you prefer not to allow that tap.
 
-## Options and troubleshooting
+## Troubleshooting
 
-- Start with automatic timing compensation. If clicks are consistently late, try `stream-continuous.bat --timing-lead-ms 100 --unknown-probe`. Adjust based on observed results; larger values can cause early clicks. Zero disables prediction.
-- For a different ADB port, append `--serial 127.0.0.1:PORT` to the launcher command.
-- `--unknown-probe` enables one experimental recovery tap after an unknown screen following reeling or rewards. Omit it to disable.
-- If setup fails, install Python 3.12 and rerun setup. If FFmpeg is not found, reopen CMD after installation.
-- If streaming fails, inspect `scrcpy-server.log` and `scrcpy-decoder.log`, verify ADB is enabled and try `adb-snapshot.bat`. The v0.4.1 port forwarding fix handles empty dynamic-port responses from older ADB implementations.
-- Benchmark FPS is not end-to-end touch latency. ADB touch commands still have overhead.
-- Foreground mode requires BlueStacks to stay focused and unmoved. Streaming mode does not use the physical mouse.
+### Bot clicks too early or too late
 
-## Development
+Start with automatic timing compensation (the default). If clicks are consistently late, try:
 
-```bat
-.venv\Scripts\python.exe -m unittest discover -v
+```cmd
+stream-continuous.bat --timing-lead-ms 100 --unknown-probe
 ```
 
-The detector uses OpenCV, reward/title templates, state debouncing and predictive marker tracking. Casting and recognized reward dismissal retry every 500 ms. Fishing rod depletion detection is not implemented. Supervise initial runs and stop if unexpected screens appear.
+Adjust the number based on results. A larger number clicks earlier; zero disables prediction. A high lead is not necessarily better.
 
-## Credits and usage
+### Bot cannot connect to BlueStacks
 
-Inspired by [Liamcky/CofCFishingBot](https://github.com/Liamcky/CofCFishingBot). Streaming uses the separately distributed [scrcpy v3.3.4](https://github.com/Genymobile/scrcpy/tree/v3.3.4) (Apache-2.0) and FFmpeg. Game artwork in the cropped detection templates belongs to its respective rights holders; no ownership is claimed. This project is unofficial and not affiliated with the game or emulator developers. Automated gameplay may violate game rules and lead to account penalties. Check the rules before use. No license for redistribution of third-party game assets is asserted.
+Check that ADB is enabled and BlueStacks is running. If your ADB port is different, replace `5555` below with the port shown in BlueStacks settings:
+
+```cmd
+stream-continuous.bat --serial 127.0.0.1:5555 --unknown-probe
+```
+
+### The system cannot find the path specified
+
+Open CMD in the folder containing `bot.py`, then run `setup.bat` again. If setup fails, install Python 3.12 and retry.
+
+### FFmpeg is not recognised
+
+Close and reopen Command Prompt after installing FFmpeg. Run `ffmpeg -version` to check, then rerun `setup-stream.bat`.
+
+### Streaming fails
+
+Check `scrcpy-server.log` and `scrcpy-decoder.log` if present. Test raw ADB capture:
+
+```cmd
+adb-snapshot.bat
+```
+
+If raw ADB works, you can try the slower alternative:
+
+```cmd
+adb-live.bat --unknown-probe
+```
+
+After a successful test:
+
+```cmd
+adb-continuous.bat --unknown-probe
+```
+
+Raw ADB capture may have higher latency during timed reeling. For foreground mode, `live.bat` requires BlueStacks to remain focused and unmoved.
+
+## Optional diagnostic commands
+
+| Command | Purpose |
+| --- | --- |
+| `stream-benchmark.bat` | Measure fresh video frame delivery on an animated screen |
+| `stream-dry-run.bat --unknown-probe` | Test detection while manually fishing; no automatic clicks |
+| `.venv\Scripts\python.exe -m unittest discover -v` | Run unit tests |
+
+## Important notes
+
+- Fishing rod depletion detection is not implemented. Supervise initial sessions.
+- Do not change Android resolution or orientation during a session.
+- If the game stops rendering when minimised, restore BlueStacks and leave it behind other windows.
+- Benchmark FPS is not end-to-end touch latency; ADB touch commands still have overhead.
+- This unofficial project is not affiliated with Clash of Critters or BlueStacks. Automation may violate game rules and lead to account penalties. Check the rules before using it.
+
+## Credits
+
+Inspired by [Liamcky/CofCFishingBot](https://github.com/Liamcky/CofCFishingBot). Uses OpenCV, [scrcpy v3.3.4](https://github.com/Genymobile/scrcpy/tree/v3.3.4) (Apache-2.0), and FFmpeg. Game artwork in cropped detection templates belongs to its respective rights holders; no ownership or redistribution license for those assets is asserted.
