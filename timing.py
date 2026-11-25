@@ -34,5 +34,5 @@ class TimingLead:
         if not 205 <= predicted <= 550:
             return False, (round(predicted,1), round(self.velocity,1))
         # Prefer the interior of the target rather than the trailing edge.
-        inset = min(8, (right-left)/4)
+        inset = min(5, (right-left)*.10)
         return left+inset <= predicted <= right-inset, (round(predicted,1), round(self.velocity,1))

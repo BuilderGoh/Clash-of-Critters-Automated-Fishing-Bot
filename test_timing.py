@@ -32,3 +32,8 @@ class TimingTests(unittest.TestCase):
         t=TimingLead();t.step('timing',True,(510,480,550,0),0,100)
         self.assertFalse(t.step('timing',True,(540,480,550,0),.1,100)[0])
 if __name__=='__main__':unittest.main()
+
+class NarrowTargetTests(unittest.TestCase):
+    def test_narrow_zone_prediction(self):
+        t=TimingLead();t.step('timing',False,(410,454,475,44),0,100)
+        self.assertTrue(t.step('timing',False,(435,454,475,19),.1,100)[0])

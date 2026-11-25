@@ -51,3 +51,8 @@ class Tests(unittest.TestCase):
     def test_truncated_raw(self):
         with self.assertRaises(ValueError):decode_raw(b'abc')
 if __name__=='__main__':unittest.main()
+
+class NarrowTargetTests(unittest.TestCase):
+    def test_new_zone_rearms_latch(self):
+        c=Controller();c.step('timing',True,0,(340,320,350,0));self.assertEqual(c.step('timing',True,.03,(340,320,350,0)),'timed_reel')
+        self.assertEqual(c.step('timing',True,.3,(465,454,475,0)),'timed_reel')

@@ -41,14 +41,12 @@ def observe(frame):
     # The alternate reward card has a green/yellow title above a bright gold or purple panel.
     title=cv2.cvtColor(frame[155:300,125:595],cv2.COLOR_BGR2GRAY)
     score=cv2.minMaxLoc(cv2.matchTemplate(title,REWARD_TITLE,cv2.TM_CCOEFF_NORMED))[1]
-    gold=fraction(hsv[390:880,0:720],(12,105,155),(38,255,255))
-    purple_panel=fraction(hsv[390:880,0:720],(125,90,130),(169,255,255))
     record_score=cv2.minMaxLoc(cv2.matchTemplate(title,RECORD_TITLE,cv2.TM_CCOEFF_NORMED))[1]
-    blue_panel=fraction(hsv[390:880,0:720],(88,85,130),(124,255,255))
-    if record_score>.68 and max(gold,purple_panel,blue_panel)>.22:
-        return "dismiss",False,None
-    if score>.68 and (gold>.22 or purple_panel>.22 or blue_panel>.22):
-        return "dismiss",False,None
+    # A bright saturated card between dimmed upper and lower game regions.
+    panel=fraction(hsv[390:880],(0,80,120),(179,255,255))
+    upper=np.median(hsv[20:145,:,2]); lower=np.median(hsv[1160:1220,:,2])
+    if max(score,record_score)>.68 and panel>.22 and upper<150 and lower<130:
+        return 'dismiss',False,None
     button=hsv[960:1145,265:455]
     green=fraction(button,(35,110,120),(85,255,255)); purple=fraction(button,(125,90,130),(169,255,255))
     if green>.23:return 'cast',False,None
@@ -60,8 +58,8 @@ def observe(frame):
         n,_,stats,cent=cv2.connectedComponentsWithStats(red)
         markers=[(int(s[4]),float(c[0]+195)) for s,c in zip(stats[1:],cent[1:]) if 10<=s[2]<=48 and 10<=s[3]<=40 and s[4]>100]
         yy=np.flatnonzero((yellow>0).sum(axis=0)>=8)+205
-        if markers and len(yy)>=12:
-            mx=max(markers)[1]; gap=float(np.min(np.abs(yy-mx))); hit=(yy.min()<=mx<=yy.max()) or gap<=10
+        if markers and len(yy)>=4:
+            mx=max(markers)[1]; gap=float(np.min(np.abs(yy-mx))); hit=gap<=2
             return 'timing',hit,(round(mx,1),int(yy.min()),int(yy.max()),round(gap,1))
         return 'timing',False,None
     gray=fraction(button,(0,0,55),(179,60,255))
@@ -72,7 +70,8 @@ def observe(frame):
 class Controller:
     state:str='unknown'; candidate:str='unknown'; count:int=0; acted:bool=False; latch:bool=False; off:int=0; last:float=-99.; cycles:int=0; reward_pending:bool=False; reward_since:float=-1.; last_reward_click:float=-99.
     unknown_probe:bool=False; unknown_since:float=-1.; unknown_probed:bool=False
-    def step(self,state,hit,now):
+    target:tuple|None=None
+    def step(self,state,hit,now,details=None):
         if state=='unknown':
             self.candidate='unknown';self.count=0
             # Optional single recovery tap after confirmed reeling/rewards.
@@ -89,7 +88,7 @@ class Controller:
         else:self.candidate=state;self.count=1
         if self.count<2:return None
         if state!=self.state:
-            self.state=state;self.acted=False;self.latch=False;self.off=0
+            self.state=state;self.acted=False;self.latch=False;self.off=0;self.target=None
         if state in ('cast','waiting','bite'):
             self.unknown_probed=False
         if state in ("claim","dismiss","reward_wait"):
@@ -108,6 +107,11 @@ class Controller:
         elif not self.reward_pending:
             self.reward_since=-1.
         if state=='timing':
+            if details is not None:
+                zone=tuple(details[1:3])
+                if self.target is not None and max(abs(zone[0]-self.target[0]),abs(zone[1]-self.target[1]))>12:
+                    self.latch=False;self.off=0
+                self.target=zone
             if not hit:
                 self.off+=1
                 if self.off>=2:self.latch=False

@@ -172,7 +172,7 @@ def adb_loop(args,adb,source,physical_size=None):
         estimated_age=args.stream_latency_ms if streaming else capture_ms*.5
         lead=args.timing_lead_ms if args.timing_lead_ms is not None else max(0, estimated_age + (tap_ms*.5 if tap_ms is not None else 40) + (time.monotonic()-(stamp if streaming else now))*1000)
         hit,prediction=tracker.step(state,hit,details,stamp,lead)
-        action=controller.step(state,hit,time.monotonic())
+        action=controller.step(state,hit,time.monotonic(),details)
         if controller.cycles>=args.max_catches:break
         if action:
             px,py=(360,1125) if action=='claim' else (360,1040)
@@ -213,7 +213,7 @@ def main():
             if state!='unknown':last_known=now
             if state!=previous:LOG.info('State: %s',state);previous=state
             if now-last_known>8:LOG.warning('Unknown screen timeout');break
-            action=controller.step(state,hit,now)
+            action=controller.step(state,hit,now,details)
             if controller.cycles>=args.max_catches:break
             if action:
                 l,t,r,b=viewport;px,py=(360,1125) if action=='claim' else (360,1040)
