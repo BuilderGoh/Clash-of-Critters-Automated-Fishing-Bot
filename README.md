@@ -1,4 +1,4 @@
-# CrittersFishingBot v0.4.1
+# CrittersFishingBot
 
 A local Python computer-vision fishing assistant for Clash of Critters on BlueStacks 5. Supports background operation using a persistent scrcpy video stream and ADB touch input, as well as raw ADB and foreground window modes. No AI API or subscription required.
 
